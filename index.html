@@ -2590,7 +2590,7 @@
         <label class="form-field"><span>UID do usuário no Firebase Authentication</span><input id="accountSetupUid" type="text" readonly aria-label="UID do usuário" style="font-family:monospace;font-size:12px"></label>
         <button id="copyAccountUidBtn" type="button" class="secondary-action">Copiar UID</button>
         <a href="https://console.firebase.google.com/project/portaldevendas-41001/firestore/databases/-default-/data" target="_blank" rel="noopener noreferrer">Abrir o Cloud Firestore deste projeto</a>
-        <small>Primeiro acesso: o proprietário do projeto precisa aprovar manualmente o primeiro administrador no console. Os demais usuários serão liberados pelo menu Permissões.</small>
+        <small>Primeiro acesso Google: o sistema cria automaticamente o administrador se a instalação ainda não tiver proprietário. Os demais usuários são cadastrados como pendentes e liberados em Permissões. Publique as regras do Firestore fornecidas com esta versão.</small>
       </div>
       <p class="login-note" id="googleHostingHint" hidden>Para entrar com Google, acesse o endereço HTTPS do sistema ou execute-o em localhost. Abrir o arquivo HTML diretamente no navegador não permite concluir essa autenticação.</p>
       <div class="login-tabs" role="tablist" aria-label="Tipo de acesso">
@@ -5215,7 +5215,7 @@
 
     function profileApprovalState(profile = {}) {
       const status = normalizeStatus(profile.status);
-      if (profile.approved === true || ["aprovado", "approved", "ativo", "active"].includes(status)) {
+      if (profile.approved === true && !["rejeitado", "rejected", "bloqueado", "blocked", "recusado"].includes(status)) {
         return "approved";
       }
       if (["rejeitado", "rejected", "bloqueado", "blocked", "recusado"].includes(status)) {
@@ -5327,11 +5327,11 @@
         "auth/cancelled-popup-request": "Já existe uma tentativa de login em andamento.",
         "auth/account-exists-with-different-credential": "Este e-mail já usa outra forma de login. Entre com o método já cadastrado para vincular a conta.",
         "auth/network-request-failed": "Falha de rede. Verifique sua conexão e tente novamente.",
-        "permission-denied": "O Firebase bloqueou o cadastro. Verifique as regras do Firestore para permitir que o usuário crie o próprio perfil pendente."
+        "permission-denied": "O Firestore bloqueou a criação automática. Publique o arquivo firestore.rules desta versão nas regras do Cloud Firestore."
       };
       if (messages[code]) return messages[code];
       const message = String(error?.message || "");
-      if (message.includes("pendente") || message.includes("aprovação")) return "Seu cadastro Google foi enviado e aguarda aprovação do administrador.";
+      if (message.includes("pendente") || message.includes("aprovação")) return "Seu cadastro Google foi criado automaticamente e está aguardando aprovação do administrador.";
       if (message.includes("bloqueado") || message.includes("rejeitado") || message.includes("recusado")) return "Seu cadastro não foi aprovado. Entre em contato com o administrador.";
       if (code.includes("permission-denied")) return messages["permission-denied"];
       return message || "Não foi possível autenticar com Google.";
@@ -5369,6 +5369,58 @@
       if (!firebase?.db) return;
       setFirebaseStatus("Sistema pronto. Faça login, cadastre um usuário ou acesse com Google.", "ok");
 
+      // Primeiro acesso: cadastro automático; o administrador inicial exige login Google verificado.
+      // O marcador de instalação e o perfil são gravados na mesma transação.
+      // As regras do Firestore precisam validar ambos os documentos (getAfter).
+      const installationRef = firebase.doc(firebase.db, "configuracao_recarga", "instalacao");
+      window.portalEnsureGoogleProfile = async (user, requestedRole = "client", registration = {}) => {
+        if (!user?.uid) throw new Error("Entre com uma conta Google válida.");
+        const profileRef = firebase.doc(firebase.db, "usuarios", user.uid);
+        const requestRef = firebase.doc(firebase.db, "solicitacoesCadastro", user.uid);
+        const requested = requestedRole === "operator" ? "operator" : "client";
+        const verifiedGoogle = user.providerData?.some(p => p.providerId === "google.com") && user.emailVerified === true;
+        try {
+          return await firebase.runTransaction(firebase.db, async transaction => {
+            const installationSnap = await transaction.get(installationRef);
+            const profileSnap = await transaction.get(profileRef);
+            const current = profileSnap.exists() ? profileSnap.data() : null;
+            if (current && profileApprovalState(current) === "approved") return current;
+            if (current && profileApprovalState(current) === "rejected") return current;
+            if (current && installationSnap.exists()) return current;
+            const now = firebase.serverTimestamp();
+            const common = {
+              uid: user.uid,
+              name: registration.name || current?.name || user.displayName || user.email || "Usuário Google",
+              company: registration.company || current?.company || "",
+              cnpj: registration.cnpj || current?.cnpj || "",
+              phone: registration.phone || current?.phone || "",
+              email: user.email || "",
+              photoURL: user.photoURL || "",
+              provider: "google",
+              requestedRole: current?.requestedRole || requested,
+              createdAt: current?.createdAt || now,
+              updatedAt: now,
+              lastLoginAt: now
+            };
+            if (!installationSnap.exists() && verifiedGoogle) {
+              const owner = { ...common, role: "admin", approved: true, status: "aprovado", approvedAt: now, approvedBy: user.uid };
+              transaction.set(installationRef, { ownerUid: user.uid, createdAt: now });
+              transaction.set(profileRef, owner);
+              return owner;
+            }
+            const pending = { ...common, role: "client", approved: false, status: "pendente" };
+            transaction.set(profileRef, pending);
+            transaction.set(requestRef, pending);
+            return pending;
+          });
+        } catch (error) {
+          if (String(error?.code || "").includes("permission-denied")) {
+            throw new Error("O Firestore impediu a criação automática. Publique as regras do arquivo firestore.rules no console e entre novamente. Nenhum administrador foi liberado.");
+          }
+          throw error;
+        }
+      };
+
       window.portalFirebaseSignIn = async (email, password, requestedRole = "client") => {
         const credential = await firebase.signInWithEmailAndPassword(firebase.auth, email, password);
         const profileRef = firebase.doc(firebase.db, "usuarios", credential.user.uid);
@@ -5392,7 +5444,7 @@
           };
           await firebase.setDoc(profileRef, pendingProfile, { merge: true });
           await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", credential.user.uid), pendingProfile, { merge: true });
-          showAccountSetup(credential.user, "Cadastro criado. Se esta for a primeira conta, use o UID acima para autorizar o administrador no console do Firestore.");
+          showAccountSetup(credential.user, "Cadastro criado automaticamente. Para ativar o primeiro administrador, entre com Google usando a conta do proprietário após publicar as regras do Firestore.");
           await firebase.signOut(firebase.auth);
           throw new Error("Perfil criado e pendente de aprovação");
         }
@@ -5464,43 +5516,14 @@
           popupCompleted = true;
           const user = credential.user;
           showAccountSetup(user, "Conta Google autenticada. Conferindo perfil no Firestore...");
-          const profileRef = firebase.doc(firebase.db, "usuarios", user.uid);
-          const profileSnap = await firebase.getDoc(profileRef);
-          const now = firebase.serverTimestamp();
-          const requested = requestedRole === "operator" ? "operator" : "client";
-
-          if (!profileSnap.exists()) {
-            // Google prova a identidade, mas não concede privilégios de operador.
-            // A aprovação e a função devem ser controladas pelas regras do Firestore.
-            const profile = {
-              uid: user.uid,
-              name: registration.name || user.displayName || user.email || "Usuário Google",
-              company: registration.company || "",
-              cnpj: registration.cnpj || "",
-              phone: registration.phone || "",
-              email: user.email || "",
-              photoURL: user.photoURL || "",
-              provider: "google",
-              role: "client",
-              requestedRole: requested,
-              approved: false,
-              status: "pendente",
-              createdAt: now,
-              updatedAt: now,
-              lastLoginAt: now
-            };
-            await firebase.setDoc(profileRef, profile);
-            await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", user.uid), profile);
-            showAccountSetup(user, "Cadastro pendente salvo em usuarios e solicitacoesCadastro. Para autorizar o primeiro administrador, edite o documento no console usando o UID acima.");
-            await firebase.signOut(firebase.auth);
-            setLoginRole("client");
-            throw new Error("Cadastro Google criado e pendente de aprovação.");
+          const profile = await window.portalEnsureGoogleProfile(user, requestedRole, registration);
+          if (profile.role === "admin" && profile.approved === true) {
+            setFirebaseStatus("Primeiro administrador criado automaticamente no Firestore.", "ok");
           }
 
-          const profile = profileSnap.data();
           const approval = profileApprovalState(profile);
           if (approval !== "approved") {
-            showAccountSetup(user, approval === "pending" ? "Conta encontrada, mas ainda não aprovada no Firestore." : "Conta recusada. Entre em contato com o administrador.");
+            showAccountSetup(user, approval === "pending" ? "Cadastro criado automaticamente no Firestore e aguardando a aprovação em Permissões." : "Conta recusada. Entre em contato com o administrador.");
             await firebase.signOut(firebase.auth);
             throw new Error(approval === "pending" ? "Cadastro pendente de aprovação." : "Cadastro bloqueado ou recusado.");
           }
@@ -5515,7 +5538,7 @@
           if (popupCompleted && firebase.auth.currentUser) {
             // Não deixar uma sessão Firebase aberta após falha de leitura/escrita do perfil.
             if (error?.code === "permission-denied") {
-              showAccountSetup(firebase.auth.currentUser, "O Firestore negou a leitura ou a gravação do perfil. Confira as regras de usuarios e solicitacoesCadastro. Se for seu primeiro acesso, copie o UID e crie o documento administrador manualmente no console.");
+              showAccountSetup(firebase.auth.currentUser, "O Firestore negou a criação automática. Publique o arquivo firestore.rules fornecido com esta versão; não é necessário criar o documento de administrador manualmente.");
             }
             await firebase.signOut(firebase.auth).catch(() => {});
           }
@@ -5628,6 +5651,17 @@
         try {
           const profileSnap = await firebase.getDoc(firebase.doc(firebase.db, "usuarios", user.uid));
           if (!profileSnap.exists()) {
+            if (user.providerData?.some(p => p.providerId === "google.com")) {
+              const restoredProfile = await window.portalEnsureGoogleProfile(user, "client");
+              if (profileApprovalState(restoredProfile) !== "approved") {
+                showAccountSetup(user, "Cadastro Google criado automaticamente e aguardando aprovação.");
+                await firebase.signOut(firebase.auth);
+                return;
+              }
+              signIn(profileRole(restoredProfile), restoredProfile.name || user.email || "Cliente", user, restoredProfile);
+              startCloudSubscriptions();
+              return;
+            }
             setFirebaseStatus("Conta autenticada. Complete o cadastro para solicitar acesso.", "warn");
             return;
           }
@@ -6072,7 +6106,7 @@
     try {
       const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js");
       const {
-        getFirestore, doc, collection, getDoc, getDocs,
+        getFirestore, doc, collection, getDoc, getDocs, runTransaction,
         addDoc, setDoc, writeBatch, onSnapshot, serverTimestamp
       } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
       const {
@@ -6085,7 +6119,7 @@
       const db = getFirestore(app);
       const auth = getAuth(app);
       window.firebasePortal = {
-        app, db, auth, doc, collection, getDoc, getDocs,
+        app, db, auth, doc, collection, getDoc, getDocs, runTransaction,
         addDoc, setDoc, writeBatch, onSnapshot, serverTimestamp,
         signInWithEmailAndPassword, createUserWithEmailAndPassword,
         GoogleAuthProvider, signInWithPopup, updateProfile, signOut,
