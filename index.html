@@ -2550,6 +2550,69 @@
       }
     }
 
+    /* Aba exclusiva de cadastro de estações — operador/admin */
+    .app { grid-template-rows:auto auto minmax(0,1fr); }
+    .operator-tabs {
+      display:flex; gap:8px; align-items:center; padding:10px 20px;
+      border-bottom:1px solid var(--line); background:#f7fafc;
+      overflow-x:auto; flex-shrink:0;
+    }
+    .operator-tab {
+      display:inline-flex; gap:8px; align-items:center; justify-content:center;
+      min-height:42px; padding:0 18px; border:1px solid #d0dfeb;
+      border-radius:10px; background:#fff; color:#24445a;
+      white-space:nowrap; font-weight:750; cursor:pointer;
+    }
+    .operator-tab.active,.operator-tab[aria-selected="true"] {
+      background:#113f63; color:#fff; border-color:#113f63;
+    }
+    .operator-tab .operator-tab-count {
+      border-radius:99px; padding:2px 7px; background:rgba(15,110,153,.11);
+      font-size:11px;
+    }
+    .operator-tab.active .operator-tab-count {background:rgba(255,255,255,.2)}
+    .app.station-tab-active > .layout {display:none!important}
+    .app:not(.station-tab-active) > .station-tab-page {display:none!important}
+    .app.station-tab-active > .station-tab-page {
+      display:block!important; position:relative; inset:auto; z-index:auto;
+      min-height:0; height:100%; overflow:auto; padding:24px;
+      background:#eef4f8; border:0;
+    }
+    .station-tab-page .modal-card {
+      max-height:none; width:min(1400px,100%); margin:0 auto;
+      border-radius:18px; overflow:visible;
+    }
+    .station-tab-page .modal-head {align-items:center;padding:22px 24px}
+    .station-tab-page .modal-body {padding:22px 24px 28px}
+    .station-tab-page .product-admin-layout {
+      grid-template-columns:minmax(0,1.2fr) minmax(280px,.8fr);
+      gap:24px;
+    }
+    .station-tab-page .product-admin-layout > form,
+    .station-tab-page .product-admin-layout > section {
+      min-width:0; padding:18px; border:1px solid var(--line);
+      background:#fbfdff; border-radius:12px;
+    }
+    .station-tab-page .product-admin-layout > section {align-self:start}
+    .station-tab-page .product-form-grid {grid-template-columns:repeat(2,minmax(0,1fr))}
+    .station-tab-page .modal-actions {display:none}
+    .station-tab-page .station-save-status {font-size:12px;color:#526c7e;line-height:1.5}
+    .station-tab-page .station-save-status.error {color:#a12929}
+    .station-tab-page .station-save-status.success {color:#126348}
+    .station-tab-page .station-save-status.busy {color:#075e86}
+    .station-tab-page .station-heading-note {margin:7px 0 0;color:#63768b;font-size:13px}
+    .station-tab-page .station-form-actions {display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    @media(max-width:1040px){
+      .station-tab-page .product-admin-layout{grid-template-columns:1fr}
+      .station-tab-page .product-admin-layout > section{width:100%}
+    }
+    @media(max-width:620px){
+      .app.station-tab-active > .station-tab-page{padding:10px}
+      .station-tab-page .modal-body,.station-tab-page .modal-head{padding:14px}
+      .station-tab-page .product-admin-layout > form,.station-tab-page .product-admin-layout > section{padding:12px}
+      .station-tab-page .product-form-grid{grid-template-columns:1fr}
+      .operator-tabs{padding:8px 10px}
+    }
     /* Recarga Pro: dados técnicos e apresentação de equipamentos */
     :root { --bg:#eff4f8; --surface-2:#f4f8fc; --ink:#123047; --muted:#617589; --line:#dce6ee; --line-strong:#b9cbd8; --accent:#087caa; --accent-2:#1cb7c1; --shadow:0 16px 40px rgba(10,43,70,.11); }
     .brand-mark,.account-avatar,.login-tab.active,.control-button.active,.product-add{background:#113f63;border-color:#113f63}
@@ -2751,7 +2814,13 @@
       </div>
     </header>
 
-    <main class="layout">
+    <nav class="operator-tabs" aria-label="Abas do operador" role="tablist">
+      <button class="operator-tab active" id="operatorAttendanceTab" type="button" role="tab" aria-selected="true" aria-controls="operatorAttendancePanel">Atendimento e propostas</button>
+      <button class="operator-tab" id="operatorStationsTab" type="button" role="tab" aria-selected="false" aria-controls="productModal">
+        Cadastro de estações <span class="operator-tab-count" id="operatorStationCount">0</span>
+      </button>
+    </nav>
+    <main class="layout" id="operatorAttendancePanel" role="tabpanel" aria-labelledby="operatorAttendanceTab">
       <aside class="panel video-panel" aria-label="Atendimento">
         <div class="panel-title">
           <h2>Chamada</h2>
@@ -3179,7 +3248,8 @@
     <div class="modal-card wide">
       <div class="modal-head">
         <div>
-          <h2 id="productModalTitle">Cadastro de estações</h2>
+          <h2 id="productModalTitle">Cadastro de estações de recarga</h2>
+          <p class="station-heading-note">Cadastre e atualize os equipamentos disponíveis para apresentar e incluir nas propostas.</p>
         </div>
         <button class="icon-button" id="closeProductModalBtn" type="button" title="Fechar" aria-label="Fechar">
           <svg class="icon" viewBox="0 0 24 24"><path d="M18 6L6 18"></path><path d="M6 6l12 12"></path></svg>
@@ -3249,10 +3319,14 @@
                 <input id="newProductImageUrl" type="url" inputmode="url" placeholder="https://exemplo.com/imagem-da-estacao.jpg">
               </label>
             </div>
-            <button class="primary-action" type="submit">
-              <svg class="icon" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"></path></svg>
-              Salvar estação
-            </button>
+            <div class="station-form-actions">
+              <button class="primary-action" id="saveStationBtn" type="submit">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"></path></svg>
+                Salvar estação
+              </button>
+              <button class="secondary-action" id="newStationBtn" type="button">Novo cadastro</button>
+            </div>
+            <p class="station-save-status" id="stationSaveStatus" role="status" aria-live="polite">As estações cadastradas aqui aparecem no catálogo e nas propostas.</p>
           </form>
 
           <section aria-label="Estações cadastradas">
@@ -3724,8 +3798,28 @@
       localStorage.setItem("recarga-pro-products-v1", JSON.stringify(products));
       if (options.skipFirebase) return;
       if (typeof window.portalSaveProductsToFirebase === "function") {
-        window.portalSaveProductsToFirebase(products);
+        window.portalSaveProductsToFirebase(products).catch(error => {
+          console.warn("Falha ao salvar catálogo no Firestore", error);
+          setStationSaveStatus("Atenção: sincronização não concluída (" + (error?.code || error?.message || "erro desconhecido") + ").", "error");
+        });
       }
+    }
+
+    function setStationSaveStatus(message, type = "") {
+      const status = document.querySelector("#stationSaveStatus");
+      if (!status) return;
+      status.textContent = message;
+      status.className = "station-save-status" + (type ? " " + type : "");
+    }
+
+    function resetStationForm(options = {}) {
+      els.productForm.reset();
+      els.newProductStock.value = "1";
+      if (els.newProductImageUrl) els.newProductImageUrl.value = "";
+      els.newProductId.readOnly = false;
+      els.newProductId.removeAttribute("aria-readonly");
+      document.querySelector("#saveStationBtn").disabled = false;
+      if (!options.preserveStatus) setStationSaveStatus("Pronto para um novo cadastro.");
     }
 
     function cloneProductsForDatabase(sourceProducts = products) {
@@ -4984,6 +5078,7 @@
       els.sessionStatus.textContent = "Sessao pronta";
       updateAccountBadge();
       setPageUrl("operador", replaceUrl);
+      setOperatorTab("attendance");
       renderCatalog();
       renderOrder();
       renderProductAdminList();
@@ -5030,6 +5125,7 @@
       state.role = null;
       state.isAdmin = false;
       state.firebaseUser = null;
+      setOperatorTab("attendance");
       els.app.classList.add("is-locked");
       els.clientApp.classList.add("is-locked");
       els.loginScreen.hidden = false;
@@ -5113,37 +5209,79 @@
       els.newProductSizes.value = product.sizes.join(", ");
       els.newProductColors.value = product.colors.map(color => `${color.name}:${color.hex}`).join(", ");
       if (els.newProductImageUrl) els.newProductImageUrl.value = product.imageUrl || "";
+      els.newProductId.readOnly = true;
+      els.newProductId.setAttribute("aria-readonly", "true");
+      setStationSaveStatus("Editando " + product.id + ". Altere os campos e clique em Salvar estação.");
+      openProductModal();
       els.newProductName.focus();
     }
 
-    function saveProduct(product) {
-      const index = products.findIndex(item => item.id === product.id);
-      if (index >= 0) {
-        products[index] = product;
-      } else {
-        products.unshift(product);
+    async function saveProduct(product) {
+      if (state.role !== "operator") {
+        setStationSaveStatus("Faça login como operador autorizado para cadastrar estações.", "error");
+        return false;
       }
-      saveProducts();
+      const index = products.findIndex(item => item.id === product.id);
+      const previous = index >= 0 ? products[index] : null;
+      if (index >= 0) products[index] = product;
+      else products.unshift(product);
+      saveProducts({ skipFirebase: true });
       renderCatalog();
       renderProductAdminList();
       showcaseProduct(product);
-      showToast("Estação salva");
+      const saveButton = document.querySelector("#saveStationBtn");
+      saveButton.disabled = true;
+      setStationSaveStatus("Salvando " + product.name + " no Firestore...", "busy");
+      try {
+        if (!state.firebaseUser || typeof window.portalSaveProductsToFirebase !== "function") {
+          throw new Error("A conexão com o Firebase não está pronta. Faça login e tente novamente.");
+        }
+        await window.portalSaveProductsToFirebase(products);
+        setStationSaveStatus("Estação " + product.id + " salva no Firestore e disponível no catálogo.", "success");
+        showToast("Estação cadastrada no Firestore");
+        return true;
+      } catch (error) {
+        console.warn("Cadastro da estação não sincronizado", error);
+        if (previous) products[products.findIndex(item => item.id === product.id)] = previous;
+        else products = products.filter(item => item.id !== product.id);
+        saveProducts({ skipFirebase: true });
+        renderCatalog();
+        renderProductAdminList();
+        setStationSaveStatus("Não foi possível gravar no Firestore: " + (error?.code || error?.message || "Verifique a conexão e as regras de acesso.") + ". Os dados continuam no formulário para tentar novamente.", "error");
+        showToast("Erro ao gravar estação no Firestore");
+        return false;
+      } finally {
+        saveButton.disabled = false;
+      }
     }
 
-    function deleteProduct(productId) {
-      products = products.filter(product => product.id !== productId);
-      state.order = state.order.filter(item => item.productId !== productId);
-      saveProducts();
-      renderCatalog();
-      renderOrder();
-      renderProductAdminList();
-      showcaseProduct(products[0]);
-      showToast("Estação removida");
+    async function deleteProduct(productId) {
+      if (state.role !== "operator") return;
+      const product = products.find(item => item.id === productId);
+      if (!product || !window.confirm("Remover a estação " + product.name + " do catálogo?") ) return;
+      const oldProducts = products.slice();
+      products = products.filter(item => item.id !== productId);
+      setStationSaveStatus("Removendo estação do catálogo no Firestore...", "busy");
+      try {
+        if (!state.firebaseUser || typeof window.portalSaveProductsToFirebase !== "function") throw new Error("Firebase indisponível");
+        await window.portalSaveProductsToFirebase(products);
+        state.order = state.order.filter(item => item.productId !== productId);
+        saveProducts({ skipFirebase: true });
+        renderCatalog();renderOrder();renderProductAdminList();showcaseProduct(products[0]);
+        setStationSaveStatus("Estação removida do catálogo. Os registros antigos podem permanecer no histórico de produtos.", "success");
+        showToast("Estação removida do catálogo");
+      } catch (error) {
+        products = oldProducts;
+        renderProductAdminList();
+        setStationSaveStatus("Falha ao remover estação: " + (error?.code || error?.message || error), "error");
+      }
     }
 
     function renderProductAdminList() {
       if (!els.productAdminList) return;
       if (!products.length) {
+        const stationCount = document.querySelector("#operatorStationCount");
+        if (stationCount) stationCount.textContent = "0";
         els.productAdminList.innerHTML = `
           <div class="empty-order">
             <div>
@@ -5155,11 +5293,14 @@
         return;
       }
 
+      const stationCount = document.querySelector("#operatorStationCount");
+      if (stationCount) stationCount.textContent = String(products.length);
       els.productAdminList.innerHTML = products.map(product => `
         <div class="admin-product-line" data-admin-product="${escapeHtml(product.id)}">
           <div>
             <h3>${escapeHtml(product.name)}</h3>
-            <p>${escapeHtml(product.id)} | ${escapeHtml(product.category)} | ${money.format(product.price)}</p>
+            <p>${escapeHtml(product.id)} · ${escapeHtml(String(product.powerKw || "—"))} kW · ${escapeHtml(product.connectors || "Conector a confirmar")}</p>
+            <p>${escapeHtml(product.category)} · ${money.format(product.price)} · Disponível: ${escapeHtml(String(product.stock ?? 0))}</p>
           </div>
           <div class="admin-actions">
             <button class="icon-button" type="button" data-edit-product="${escapeHtml(product.id)}" title="Editar" aria-label="Editar">
@@ -5173,13 +5314,24 @@
       `).join("");
     }
 
+    function setOperatorTab(tab = "attendance") {
+      const stations = tab === "stations" && state.role === "operator";
+      els.app.classList.toggle("station-tab-active", stations);
+      document.querySelector("#operatorAttendanceTab")?.classList.toggle("active", !stations);
+      document.querySelector("#operatorStationsTab")?.classList.toggle("active", stations);
+      document.querySelector("#operatorAttendanceTab")?.setAttribute("aria-selected", String(!stations));
+      document.querySelector("#operatorStationsTab")?.setAttribute("aria-selected", String(stations));
+      document.querySelector("#operatorAttendancePanel")?.setAttribute("aria-hidden", String(stations));
+      els.productModal.setAttribute("aria-hidden", String(!stations));
+      if (stations) renderProductAdminList();
+    }
+
     function openProductModal() {
-      renderProductAdminList();
-      els.productModal.classList.add("open");
+      setOperatorTab("stations");
     }
 
     function closeProductModal() {
-      els.productModal.classList.remove("open");
+      setOperatorTab("attendance");
     }
 
     function restoreDefaultProducts() {
@@ -5194,7 +5346,7 @@
     }
 
     function applyRemoteProducts(remoteProducts) {
-      if (!Array.isArray(remoteProducts) || !remoteProducts.length) return;
+      if (!Array.isArray(remoteProducts)) return;
       products = remoteProducts;
       localStorage.setItem("recarga-pro-products-v1", JSON.stringify(products));
       state.featuredProductId = products[0]?.id || null;
@@ -5739,11 +5891,7 @@
       }
 
       window.portalSaveProductsToFirebase = async nextProducts => {
-        try {
-          await window.portalSeedDatabase(nextProducts, { silent: true });
-        } catch (error) {
-          console.warn("Firebase catalog save failed", error);
-        }
+        await window.portalSeedDatabase(nextProducts, { silent: true });
       };
 
       window.portalSeedDatabase = async (sourceProducts = products, options = {}) => {
@@ -5987,22 +6135,24 @@
     els.closeInviteBtn.addEventListener("click", closeInvite);
     els.closeInviteBottomBtn.addEventListener("click", closeInvite);
     els.copyInviteBtn.addEventListener("click", copyInvite);
+    document.querySelector("#operatorAttendanceTab").addEventListener("click", closeProductModal);
+    document.querySelector("#operatorStationsTab").addEventListener("click", openProductModal);
+    document.querySelector("#newStationBtn").addEventListener("click", resetStationForm);
     els.productAdminBtn.addEventListener("click", openProductModal);
     els.catalogAdminBtn.addEventListener("click", openProductModal);
     els.closeProductModalBtn.addEventListener("click", closeProductModal);
     els.closeProductBottomBtn.addEventListener("click", closeProductModal);
     els.logoutBtn.addEventListener("click", signOut);
-    els.productForm.addEventListener("submit", event => {
+    els.productForm.addEventListener("submit", async event => {
       event.preventDefault();
       const product = productFromForm();
       if (!product) {
+        setStationSaveStatus("Revise código, nome, preço, estoque, potência, alimentação, conectores e acabamentos.", "error");
         showToast("Revise os dados técnicos da estação");
         return;
       }
-      saveProduct(product);
-      els.productForm.reset();
-      els.newProductStock.value = "1";
-      if (els.newProductImageUrl) els.newProductImageUrl.value = "";
+      const saved = await saveProduct(product);
+      if (saved) resetStationForm({ preserveStatus: true });
     });
     els.productAdminList.addEventListener("click", event => {
       const editButton = event.target.closest("[data-edit-product]");
@@ -6083,6 +6233,14 @@
       }
     });
 
+    // O formulário preexistente do modal vira uma página/aba do painel do operador.
+    els.app.appendChild(els.productModal);
+    els.productModal.classList.remove("modal", "open");
+    els.productModal.classList.add("station-tab-page");
+    els.productModal.removeAttribute("aria-modal");
+    els.productModal.setAttribute("role", "tabpanel");
+    els.productModal.setAttribute("aria-labelledby", "operatorStationsTab");
+    els.productModal.setAttribute("aria-hidden", "true");
     initializeFromUrl();
     els.roomCodeLabel.textContent = state.roomCode;
     renderCatalog();
