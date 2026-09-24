@@ -2550,6 +2550,14 @@
       }
     }
 
+    /* O perfil exibido vem do documento usuarios/{uid}, nunca da rota do convite. */
+    .profile-notice {
+      padding:10px 20px; border-bottom:1px solid #cfdeed;
+      background:#eaf4ff; color:#214a67; font-size:13px; line-height:1.45;
+    }
+    .profile-notice[hidden] {display:none!important}
+    #clientProfileBadge,#operatorProfileBadge {color:#165d76;background:#eaf4ff;border-color:#bad8eb}
+
     /* Aba exclusiva de cadastro de estações — operador/admin */
     .app { grid-template-rows:auto auto minmax(0,1fr); }
     .operator-tabs {
@@ -2800,6 +2808,7 @@
         <button class="icon-button" id="shareOrderBtn" type="button" title="Compartilhar proposta" aria-label="Compartilhar proposta">
           <svg class="icon" viewBox="0 0 24 24"><path d="M4 12v8h16v-8"></path><path d="M16 6l-4-4-4 4"></path><path d="M12 2v13"></path></svg>
         </button>
+        <div class="account-chip" id="operatorProfileBadge" aria-label="Perfil no Firestore" title="Permissão definida pelo cadastro aprovado no Firestore">Perfil: verificando</div>
         <div class="account-chip" id="accountChip" aria-label="Conta logada">
           <span class="account-avatar" id="accountAvatar">OP</span>
           <span id="accountName">Operador</span>
@@ -3057,6 +3066,7 @@
           <svg class="icon" viewBox="0 0 24 24"><path d="M3 5h18"></path><path d="M3 12h18"></path><path d="M3 19h18"></path></svg>
           Tela operador
         </button>
+        <div class="account-chip" id="clientProfileBadge" aria-label="Perfil no Firestore" title="Permissão definida pelo cadastro aprovado no Firestore">Perfil: verificando</div>
         <div class="account-chip" id="clientAccountChip" aria-label="Conta logada">
           <span class="account-avatar" id="clientAccountAvatar">LJ</span>
           <span id="clientAccountName">Cliente</span>
@@ -3067,6 +3077,7 @@
       </div>
     </header>
 
+    <div class="profile-notice" id="clientProfileNotice" role="status" hidden></div>
     <main class="client-layout">
       <section class="client-live" aria-label="Live do cliente">
         <div class="panel-title">
@@ -3650,6 +3661,9 @@
       confirmOrderBtn: document.querySelector("#confirmOrderBtn"),
       shareOrderBtn: document.querySelector("#shareOrderBtn"),
       accountChip: document.querySelector("#accountChip"),
+      operatorProfileBadge: document.querySelector("#operatorProfileBadge"),
+      clientProfileBadge: document.querySelector("#clientProfileBadge"),
+      clientProfileNotice: document.querySelector("#clientProfileNotice"),
       accountAvatar: document.querySelector("#accountAvatar"),
       accountName: document.querySelector("#accountName"),
       viewClientBtn: document.querySelector("#viewClientBtn"),
@@ -3934,6 +3948,9 @@
         url.searchParams.delete("perfil");
       } else {
         url.searchParams.set("pagina", page);
+        // Links de convite (?perfil=cliente) NÃO podem fixar o operador no portal do cliente.
+        // A visualização do cliente é acessada somente pelo botão específico no painel.
+        url.searchParams.delete("perfil");
       }
       const method = replace ? "replaceState" : "pushState";
       window.history[method]({ page }, "", url);
@@ -5061,6 +5078,21 @@
 
     function updateAccountBadge() {
       const operatorLabel = state.isAdmin ? "Administrador" : state.role === "operator" ? "Operador" : state.userName;
+      const actualProfile = state.isAdmin ? "Administrador" : state.role === "operator" ? "Operador" : state.role === "client" ? "Cliente" : "Não identificado";
+      if (els.operatorProfileBadge) els.operatorProfileBadge.textContent = `Perfil: ${actualProfile}`;
+      if (els.clientProfileBadge) els.clientProfileBadge.textContent = `Perfil: ${actualProfile}`;
+      if (els.clientProfileNotice) {
+        if (state.role === "operator") {
+          els.clientProfileNotice.hidden = false;
+          els.clientProfileNotice.textContent = `Você está visualizando a tela do cliente. Seu perfil no Firestore é ${actualProfile}. Clique em “Tela operador” no canto superior para voltar ao cadastro de estações.`;
+        } else if (state.role === "client") {
+          els.clientProfileNotice.hidden = false;
+          els.clientProfileNotice.textContent = "Sua conta está aprovada com o perfil Cliente no Firestore. Para acessar o cadastro de estações, um administrador precisa aprovar esta conta como Operador no menu Permissões. Entrar na aba Operador do login não muda a permissão do Firestore.";
+        } else {
+          els.clientProfileNotice.hidden = true;
+          els.clientProfileNotice.textContent = "";
+        }
+      }
       els.accountAvatar.textContent = state.role === "operator" ? "OP" : initials(state.userName);
       els.accountName.textContent = state.firebaseUser?.email || operatorLabel;
       const approvalsButton = document.querySelector("#approvalsBtn");
@@ -5070,6 +5102,11 @@
     }
 
     function showOperatorScreen(replaceUrl = false) {
+      // Nunca exibir ferramentas de operador somente por URL ou aba escolhida no login.
+      if (state.role !== "operator") {
+        showClientScreen(replaceUrl);
+        return;
+      }
       els.loginScreen.hidden = true;
       els.loginScreen.classList.add("is-locked");
       els.clientApp.classList.add("is-locked");
@@ -5833,11 +5870,13 @@
           startCloudSubscriptions();
           updateClientIdentity(profile.name || user.displayName || user.email || "Cliente");
           saveSession();
-          const requestedPage = new URLSearchParams(window.location.search).get("pagina");
-          if (requestedPage === "cliente" || role === "client") {
-            showClientScreen(true);
-          } else {
+          // O perfil APROVADO no Firestore decide a página inicial, nunca a URL antiga
+          // (?pagina=cliente), o link de convite ou a aba escolhida antes do login.
+          // Para um operador ver o portal cliente existe o botão "Tela cliente".
+          if (role === "operator") {
             showOperatorScreen(true);
+          } else {
+            showClientScreen(true);
           }
         } catch (error) {
           console.warn("Firebase auth profile failed", error);
@@ -6104,11 +6143,13 @@
     });
 
     els.viewClientBtn.addEventListener("click", () => {
-      state.role = "operator";
+      // Só alterna a VISUALIZAÇÃO: não altera a permissão do usuário autenticado.
+      if (state.role !== "operator") return;
       showClientScreen();
       showToast("Tela do cliente");
     });
     els.viewAdminBtn.addEventListener("click", () => {
+      if (state.role !== "operator") return;
       showOperatorScreen();
       showToast("Tela do operador");
     });
