@@ -175,7 +175,7 @@
     }
 
     .firebase-status {
-      display: none !important;
+      display: block;
       margin: 0;
       padding: 10px 12px;
       border: 1px solid var(--line);
@@ -2582,7 +2582,8 @@
 
     <div class="login-card">
       <h2>Entrar na sala</h2>
-      <p class="firebase-status warn" id="firebaseStatus">Sistema iniciando...</p>
+      <p class="firebase-status warn" id="firebaseStatus" role="status" aria-live="polite">Conectando ao Firebase...</p>
+      <p class="login-note" id="googleHostingHint" hidden>Para entrar com Google, acesse o endereço HTTPS do sistema ou execute-o em localhost. Abrir o arquivo HTML diretamente no navegador não permite concluir essa autenticação.</p>
       <div class="login-tabs" role="tablist" aria-label="Tipo de acesso">
         <button class="login-tab active" type="button" data-login-role="operator">Operador</button>
         <button class="login-tab" type="button" data-login-role="client">Cliente</button>
@@ -3670,12 +3671,16 @@
 
     function setFirebaseStatus(message, type = "info") {
       if (!els.firebaseStatus) return;
-      els.firebaseStatus.hidden = true;
-      els.firebaseStatus.textContent = "";
+      els.firebaseStatus.hidden = !message;
+      els.firebaseStatus.textContent = message || "";
       els.firebaseStatus.className = `firebase-status ${type}`.trim();
     }
 
     window.setFirebaseStatus = setFirebaseStatus;
+    if (window.location.protocol === "file:") {
+      document.querySelector("#googleHostingHint").hidden = false;
+      setFirebaseStatus("Publique o sistema em HTTPS ou localhost para usar o login Google.", "warn");
+    }
 
     function loadProducts() {
       try {
@@ -4428,13 +4433,13 @@
 
     function callDocRef() {
       const firebase = window.firebasePortal;
-      if (!firebase?.db) throw new Error("Realtime Database ainda não carregou");
+      if (!firebase?.db) throw new Error("Cloud Firestore ainda não carregou");
       return firebase.doc(firebase.db, "calls_recarga", state.roomCode);
     }
 
     function candidateCollection(name) {
       const firebase = window.firebasePortal;
-      if (!firebase?.db) throw new Error("Realtime Database ainda não carregou");
+      if (!firebase?.db) throw new Error("Cloud Firestore ainda não carregou");
       return firebase.collection(firebase.db, "calls_recarga", state.roomCode, name);
     }
 
@@ -4560,7 +4565,7 @@
 
     function createPeerConnection(role) {
       const firebase = window.firebasePortal;
-      if (!firebase?.db) throw new Error("Realtime Database não conectado");
+      if (!firebase?.db) throw new Error("Cloud Firestore não conectado");
 
       const pc = new RTCPeerConnection(rtcConfig);
       state.peerConnection = pc;
@@ -5186,7 +5191,8 @@
       if (profile.approved === false || ["pendente", "pending", "aguardando_aprovacao", "aguardando"].includes(status)) {
         return "pending";
       }
-      return "approved";
+      // Perfil sem estado explícito nunca recebe acesso automaticamente.
+      return "pending";
     }
 
     function profileRole(profile = {}) {
@@ -5275,34 +5281,53 @@
     }
 
 
+    let googleLoginPending = false;
+    const googleButtons = [els.operatorGoogleBtn, els.clientGoogleBtn, els.registerGoogleBtn].filter(Boolean);
+
+    function googleLoginErrorMessage(error) {
+      const code = String(error?.code || "");
+      const messages = {
+        "auth/unauthorized-domain": "Este endereço não está autorizado. Adicione o domínio em Firebase > Authentication > Settings > Authorized domains.",
+        "auth/operation-not-allowed": "Ative Google em Firebase > Authentication > Sign-in method.",
+        "auth/popup-blocked": "O navegador bloqueou a janela do Google. Permita pop-ups para este site e tente novamente.",
+        "auth/popup-closed-by-user": "O acesso com Google foi cancelado.",
+        "auth/cancelled-popup-request": "Já existe uma tentativa de login em andamento.",
+        "auth/account-exists-with-different-credential": "Este e-mail já usa outra forma de login. Entre com o método já cadastrado para vincular a conta.",
+        "auth/network-request-failed": "Falha de rede. Verifique sua conexão e tente novamente.",
+        "permission-denied": "O Firebase bloqueou o cadastro. Verifique as regras do Firestore para permitir que o usuário crie o próprio perfil pendente."
+      };
+      if (messages[code]) return messages[code];
+      const message = String(error?.message || "");
+      if (message.includes("pendente") || message.includes("aprovação")) return "Seu cadastro Google foi enviado e aguarda aprovação do administrador.";
+      if (message.includes("bloqueado") || message.includes("rejeitado") || message.includes("recusado")) return "Seu cadastro não foi aprovado. Entre em contato com o administrador.";
+      if (code.includes("permission-denied")) return messages["permission-denied"];
+      return message || "Não foi possível autenticar com Google.";
+    }
+
     async function firebaseGoogleAccess(requestedRole = "client", registration = {}) {
+      if (googleLoginPending) return;
       if (!window.portalFirebaseGoogleSignIn) {
-        setFirebaseStatus("Sistema carregando. Aguarde alguns segundos e tente novamente.", "warn");
-        showToast("Aguarde o sistema carregar");
+        setFirebaseStatus("O Firebase não carregou. Confira a conexão e atualize a página.", "danger");
+        return;
+      }
+      if (!(["http:", "https:"].includes(window.location.protocol))) {
+        setFirebaseStatus("Abra o sistema em HTTPS ou localhost para autenticar com Google; não use file://.", "danger");
         return;
       }
 
+      googleLoginPending = true;
+      googleButtons.forEach(button => { button.disabled = true; button.setAttribute("aria-busy", "true"); });
       try {
-        setFirebaseStatus("Abrindo acesso com Google...", "warn");
+        setFirebaseStatus("Escolha sua conta na janela do Google...", "warn");
         await window.portalFirebaseGoogleSignIn(requestedRole, registration);
       } catch (error) {
-        console.warn("Firebase Google login failed", error);
-        const message = String(error?.message || "").toLowerCase();
-        const code = error?.code || "";
-        setFirebaseStatus(`Falha no Google: ${code || error?.message || "verifique se o provedor Google está ativado"}`, "danger");
-        if (message.includes("perfil criado")) {
-          showToast("Cadastro criado. Aguarde aprovação.");
-        } else if (message.includes("pendente")) {
-          showToast("Cadastro Google pendente de aprovação");
-        } else if (message.includes("bloqueado") || message.includes("rejeitado") || message.includes("recusado")) {
-          showToast("Cadastro Google não aprovado");
-        } else if (code.includes("popup-closed-by-user")) {
-          showToast("Login Google cancelado");
-        } else if (code.includes("operation-not-allowed")) {
-          showToast("Acesso com Google não está habilitado");
-        } else {
-          showToast("Não foi possível entrar com Google");
-        }
+        console.warn("Falha no login Google:", error);
+        const message = googleLoginErrorMessage(error);
+        setFirebaseStatus(message, "danger");
+        showToast(message);
+      } finally {
+        googleLoginPending = false;
+        googleButtons.forEach(button => { button.disabled = false; button.removeAttribute("aria-busy"); });
       }
     }
 
@@ -5388,67 +5413,74 @@
       };
 
 
+      let googleAuthInProgress = false;
       window.portalFirebaseGoogleSignIn = async (requestedRole = "client", registration = {}) => {
         if (!firebase.GoogleAuthProvider || !firebase.signInWithPopup) {
-          throw new Error("Acesso com Google não carregado");
+          throw new Error("A biblioteca de autenticação Google não carregou.");
         }
-
         const provider = new firebase.GoogleAuthProvider();
         provider.setCustomParameters({ prompt: "select_account" });
-        const credential = await firebase.signInWithPopup(firebase.auth, provider);
-        const user = credential.user;
-        const profileRef = firebase.doc(firebase.db, "usuarios", user.uid);
-        const profileSnap = await firebase.getDoc(profileRef);
-        const now = firebase.serverTimestamp();
-        const role = requestedRole === "operator" ? "operator" : "client";
+        googleAuthInProgress = true;
+        let popupCompleted = false;
+        try {
+          // Chamada direta durante o clique: evita bloqueio de popup por perda de gesto do usuário.
+          const credential = await firebase.signInWithPopup(firebase.auth, provider);
+          popupCompleted = true;
+          const user = credential.user;
+          const profileRef = firebase.doc(firebase.db, "usuarios", user.uid);
+          const profileSnap = await firebase.getDoc(profileRef);
+          const now = firebase.serverTimestamp();
+          const requested = requestedRole === "operator" ? "operator" : "client";
 
-        if (!profileSnap.exists()) {
-          const profile = {
-            uid: user.uid,
-            name: registration.name || user.displayName || user.email || "Usuário Google",
-            company: registration.company || "",
-            cnpj: registration.cnpj || "",
-            phone: registration.phone || "",
-            email: user.email || registration.email || "",
-            photoURL: user.photoURL || "",
-            provider: "google",
-            role,
-            requestedRole: role,
-            approved: false,
-            status: "pendente",
-            createdAt: now,
-            updatedAt: now,
-            lastLoginAt: now
-          };
-          await firebase.setDoc(profileRef, profile, { merge: true });
-          await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", user.uid), profile, { merge: true });
-          await firebase.signOut(firebase.auth);
-          throw new Error("Perfil criado e pendente de aprovação");
+          if (!profileSnap.exists()) {
+            // Google prova a identidade, mas não concede privilégios de operador.
+            // A aprovação e a função devem ser controladas pelas regras do Firestore.
+            const profile = {
+              uid: user.uid,
+              name: registration.name || user.displayName || user.email || "Usuário Google",
+              company: registration.company || "",
+              cnpj: registration.cnpj || "",
+              phone: registration.phone || "",
+              email: user.email || "",
+              photoURL: user.photoURL || "",
+              provider: "google",
+              role: "client",
+              requestedRole: requested,
+              approved: false,
+              status: "pendente",
+              createdAt: now,
+              updatedAt: now,
+              lastLoginAt: now
+            };
+            await firebase.setDoc(profileRef, profile);
+            await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", user.uid), profile);
+            await firebase.signOut(firebase.auth);
+            setLoginRole("client");
+            throw new Error("Cadastro Google criado e pendente de aprovação.");
+          }
+
+          const profile = profileSnap.data();
+          const approval = profileApprovalState(profile);
+          if (approval !== "approved") {
+            await firebase.signOut(firebase.auth);
+            throw new Error(approval === "pending" ? "Cadastro pendente de aprovação." : "Cadastro bloqueado ou recusado.");
+          }
+
+          // A função efetiva vem exclusivamente do documento aprovado, não da aba escolhida.
+          const finalRole = profileRole(profile);
+          const name = profile.name || user.displayName || user.email || "Cliente";
+          startCloudSubscriptions();
+          setFirebaseStatus("Login Google realizado com sucesso.", "ok");
+          signIn(finalRole, name, user);
+        } catch (error) {
+          if (popupCompleted && firebase.auth.currentUser) {
+            // Não deixar uma sessão Firebase aberta após falha de leitura/escrita do perfil.
+            await firebase.signOut(firebase.auth).catch(() => {});
+          }
+          throw error;
+        } finally {
+          googleAuthInProgress = false;
         }
-
-        const profile = profileSnap.data();
-        const approval = profileApprovalState(profile);
-        if (approval === "pending") {
-          await firebase.signOut(firebase.auth);
-          throw new Error("Cadastro pendente de aprovação");
-        }
-        if (approval === "rejected") {
-          await firebase.signOut(firebase.auth);
-          throw new Error("Cadastro bloqueado, recusado ou rejeitado");
-        }
-
-        await firebase.setDoc(profileRef, {
-          email: user.email || profile.email || "",
-          photoURL: user.photoURL || profile.photoURL || "",
-          provider: profile.provider || "google",
-          lastLoginAt: now,
-          updatedAt: now
-        }, { merge: true });
-
-        const finalRole = profileRole(profile);
-        const name = profile.name || user.displayName || user.email || "Cliente";
-        setFirebaseStatus(`Acesso com Google liberado como ${finalRole === "operator" ? "operador" : "cliente"}.`, "ok");
-        signIn(finalRole, name, user);
       };
 
       window.portalFirebaseSignOut = async () => {
@@ -5520,33 +5552,27 @@
         await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", uid), data, { merge: true });
       };
 
-      const orderRef = firebase.doc(firebase.db, "pedidos_recarga", state.roomCode);
-      firebase.onSnapshot(orderRef, snapshot => {
-        const data = snapshot.data();
-        if (data?.order && Array.isArray(data.order)) {
-          applyRemoteOrder(data);
-        }
-      }, error => {
-        console.warn("Firebase order listener failed", error);
-        updateOrderCloudStatus("Atenção");
-      });
-
-      const presentationRef = firebase.doc(firebase.db, "apresentacoes_recarga", state.roomCode);
-      firebase.onSnapshot(presentationRef, snapshot => {
-        const data = snapshot.data();
-        if (!data?.featuredProductId) return;
-        const remoteProduct = data.product && typeof data.product === "object" ? data.product : null;
-        const product = products.find(item => item.id === data.featuredProductId) || remoteProduct;
-        if (product) showcaseProduct(product, { skipSave: true });
-      }, error => {
-        console.warn("Presentation listener failed", error);
-      });
-
       firebase.onAuthStateChanged(firebase.auth, async user => {
-        if (!user) return;
+        if (googleAuthInProgress) return;
+        if (!user) {
+          stopCloudSubscriptions();
+          if (state.firebaseUser) {
+            state.firebaseUser = null;
+            state.role = null;
+            els.app.classList.add("is-locked");
+            els.clientApp.classList.add("is-locked");
+            els.loginScreen.hidden = false;
+            els.loginScreen.classList.remove("is-locked");
+            clearSession();
+          }
+          return;
+        }
         try {
           const profileSnap = await firebase.getDoc(firebase.doc(firebase.db, "usuarios", user.uid));
-          if (!profileSnap.exists()) return;
+          if (!profileSnap.exists()) {
+            setFirebaseStatus("Conta autenticada. Complete o cadastro para solicitar acesso.", "warn");
+            return;
+          }
           const profile = profileSnap.data();
           const approval = profileApprovalState(profile);
           if (approval !== "approved") {
@@ -5558,6 +5584,7 @@
           const role = profileRole(profile);
           state.firebaseUser = user;
           state.role = role;
+          startCloudSubscriptions();
           updateClientIdentity(profile.name || user.displayName || user.email || "Cliente");
           saveSession();
           const requestedPage = new URLSearchParams(window.location.search).get("pagina");
@@ -5568,10 +5595,54 @@
           }
         } catch (error) {
           console.warn("Firebase auth profile failed", error);
+          setFirebaseStatus(googleLoginErrorMessage(error), "danger");
         }
       });
 
       const catalogRef = firebase.doc(firebase.db, "portais", "portal-recarga-v1");
+
+      let cloudSubscriptions = [];
+      function stopCloudSubscriptions() {
+        for (const unsubscribe of cloudSubscriptions) unsubscribe();
+        cloudSubscriptions = [];
+      }
+      function startCloudSubscriptions() {
+        stopCloudSubscriptions();
+      const orderRef = firebase.doc(firebase.db, "pedidos_recarga", state.roomCode);
+      cloudSubscriptions.push(firebase.onSnapshot(orderRef, snapshot => {
+        const data = snapshot.data();
+        if (data?.order && Array.isArray(data.order)) {
+          applyRemoteOrder(data);
+        }
+      }, error => {
+        console.warn("Firebase order listener failed", error);
+        updateOrderCloudStatus("Atenção");
+      }));
+
+      const presentationRef = firebase.doc(firebase.db, "apresentacoes_recarga", state.roomCode);
+      cloudSubscriptions.push(firebase.onSnapshot(presentationRef, snapshot => {
+        const data = snapshot.data();
+        if (!data?.featuredProductId) return;
+        const remoteProduct = data.product && typeof data.product === "object" ? data.product : null;
+        const product = products.find(item => item.id === data.featuredProductId) || remoteProduct;
+        if (product) showcaseProduct(product, { skipSave: true });
+      }, error => {
+        console.warn("Presentation listener failed", error);
+      }));
+
+      cloudSubscriptions.push(firebase.onSnapshot(catalogRef, snapshot => {
+        const data = snapshot.data();
+        if (data?.products) {
+          applyRemoteProducts(data.products);
+        } else {
+          window.portalSeedDatabase(products, { silent: true });
+        }
+      }, error => {
+        console.warn("Firebase catalog listener failed", error);
+        showToast("Sem permissão de leitura");
+      }));
+
+      }
 
       window.portalSaveProductsToFirebase = async nextProducts => {
         try {
@@ -5616,18 +5687,6 @@
           showToast(`${cleanProducts.length} itens atualizados`);
         }
       };
-
-      firebase.onSnapshot(catalogRef, snapshot => {
-        const data = snapshot.data();
-        if (data?.products) {
-          applyRemoteProducts(data.products);
-        } else {
-          window.portalSeedDatabase(products, { silent: true });
-        }
-      }, error => {
-        console.warn("Firebase catalog listener failed", error);
-        showToast("Sem permissão de leitura");
-      });
 
       showToast("Sistema pronto");
     });
@@ -5934,188 +5993,52 @@
     showcaseProduct(products[0]);
   </script>
   <script type="module">
+    // Firebase do Portal de Vendas. Firestore é usado para catálogo,
+    // propostas e sinalização da videochamada (sem URL de RTDB).
     const firebaseConfig = {
-      apiKey: "AIzaSyBan0uoa0EQlxH7lAf0WfVVCPRbArk_igs",
-      authDomain: "portal-f422a.firebaseapp.com",
-      projectId: "portal-f422a",
-      storageBucket: "portal-f422a.firebasestorage.app",
-      messagingSenderId: "479661755295",
-      appId: "1:479661755295:web:15e4f2e340db72a2b5cbaa",
-      databaseURL: "https://portal-f422a-default-rtdb.firebaseio.com"
+      apiKey: "AIzaSyDATm_HDvBr8E_B8vRnzQrkar4-CFUsfmE",
+      authDomain: "portaldevendas-41001.firebaseapp.com",
+      projectId: "portaldevendas-41001",
+      storageBucket: "portaldevendas-41001.firebasestorage.app",
+      messagingSenderId: "276862898533",
+      appId: "1:276862898533:web:069ed5d3495d3fc347918c",
+      measurementId: "G-ZDQC7Z7Q2B"
     };
-
-    function safeKey(part) {
-      return String(part ?? "")
-        .trim()
-        .replace(/[.#$/[\]]/g, "_")
-        .replace(/^\/+|\/+$/g, "") || "_";
-    }
-
-    function cleanForRealtime(value) {
-      if (value === undefined) return null;
-      if (value === null) return null;
-      if (Array.isArray(value)) return value.map(cleanForRealtime);
-      if (typeof value === "object") {
-        const out = {};
-        Object.entries(value).forEach(([key, val]) => {
-          if (val !== undefined) out[key] = cleanForRealtime(val);
-        });
-        return out;
-      }
-      return value;
-    }
-
-    function snapshotAdapter(path, snapshot, type = "doc", seen = null) {
-      const value = snapshot.val();
-      const id = path.split("/").filter(Boolean).pop() || "";
-
-      if (type === "collection") {
-        const rows = value && typeof value === "object" && !Array.isArray(value)
-          ? Object.entries(value)
-          : [];
-
-        const docs = rows.map(([docId, docData]) => ({
-          id: docId,
-          data: () => docData || {}
-        }));
-
-        const changes = rows
-          .filter(([docId]) => !seen || !seen.has(docId))
-          .map(([docId, docData]) => {
-            if (seen) seen.add(docId);
-            return {
-              type: "added",
-              doc: {
-                id: docId,
-                data: () => docData || {}
-              }
-            };
-          });
-
-        return {
-          docs,
-          empty: docs.length === 0,
-          docChanges: () => changes
-        };
-      }
-
-      return {
-        id,
-        exists: () => snapshot.exists(),
-        data: () => value || {}
-      };
-    }
 
     try {
       const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js");
       const {
-        getDatabase,
-        ref,
-        get,
-        set,
-        update,
-        push,
-        onValue,
-        serverTimestamp
-      } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js");
+        getFirestore, doc, collection, getDoc, getDocs,
+        addDoc, setDoc, onSnapshot, serverTimestamp
+      } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
       const {
-        getAuth,
-        signInWithEmailAndPassword,
-        createUserWithEmailAndPassword,
-        GoogleAuthProvider,
-        signInWithPopup,
-        updateProfile,
-        signOut,
-        onAuthStateChanged
+        getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+        GoogleAuthProvider, signInWithPopup, updateProfile,
+        signOut, onAuthStateChanged
       } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js");
 
       const app = initializeApp(firebaseConfig);
-      const db = getDatabase(app);
+      const db = getFirestore(app);
       const auth = getAuth(app);
-
-      const doc = (_db, ...segments) => ({
-        kind: "doc",
-        path: segments.map(safeKey).join("/")
-      });
-
-      const collection = (_db, ...segments) => ({
-        kind: "collection",
-        path: segments.map(safeKey).join("/")
-      });
-
-      const setDoc = async (docRef, data, options = {}) => {
-        const dbRef = ref(db, docRef.path);
-        const clean = cleanForRealtime(data);
-        if (options?.merge) {
-          await update(dbRef, clean);
-        } else {
-          await set(dbRef, clean);
-        }
-      };
-
-      const getDoc = async docRef => {
-        const snapshot = await get(ref(db, docRef.path));
-        return snapshotAdapter(docRef.path, snapshot, "doc");
-      };
-
-      const getDocs = async collectionRef => {
-        const snapshot = await get(ref(db, collectionRef.path));
-        return snapshotAdapter(collectionRef.path, snapshot, "collection");
-      };
-
-      const addDoc = async (collectionRef, data) => {
-        const itemRef = push(ref(db, collectionRef.path));
-        await set(itemRef, cleanForRealtime(data));
-        return { id: itemRef.key, path: `${collectionRef.path}/${itemRef.key}` };
-      };
-
-      const onSnapshot = (refObject, callback, errorCallback) => {
-        const seen = refObject.kind === "collection" ? new Set() : null;
-        return onValue(
-          ref(db, refObject.path),
-          snapshot => callback(snapshotAdapter(refObject.path, snapshot, refObject.kind, seen)),
-          error => {
-            console.warn("Realtime Database listener failed", error);
-            if (typeof errorCallback === "function") errorCallback(error);
-          }
-        );
-      };
-
-      console.info("Firebase Realtime Database conectado ao projeto:", firebaseConfig.projectId);
-      window.setFirebaseStatus?.(
-        `Sistema pronto`,
-        "ok"
-      );
-
       window.firebasePortal = {
-        app,
-        db,
-        auth,
-        doc,
-        getDoc,
-        getDocs,
-        collection,
-        addDoc,
-        setDoc,
-        onSnapshot,
-        serverTimestamp,
-        signInWithEmailAndPassword,
-        createUserWithEmailAndPassword,
-        GoogleAuthProvider,
-        signInWithPopup,
-        updateProfile,
-        signOut,
+        app, db, auth, doc, collection, getDoc, getDocs,
+        addDoc, setDoc, onSnapshot, serverTimestamp,
+        signInWithEmailAndPassword, createUserWithEmailAndPassword,
+        GoogleAuthProvider, signInWithPopup, updateProfile, signOut,
         onAuthStateChanged
       };
+      window.setFirebaseStatus?.("Firebase configurado. Faça login para sincronizar os dados.", "ok");
+      window.dispatchEvent(new CustomEvent("firebase-ready", { detail: window.firebasePortal }));
 
-      window.dispatchEvent(new CustomEvent("firebase-ready", {
-        detail: window.firebasePortal
-      }));
+      // Métricas são opcionais: não impedir o login se Analytics for bloqueado.
+      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-analytics.js")
+        .then(async ({ isSupported, getAnalytics }) => {
+          if (await isSupported()) getAnalytics(app);
+        }).catch(error => console.info("Analytics indisponível neste navegador:", error));
     } catch (error) {
-      window.setFirebaseStatus?.(`Erro ao carregar o sistema: ${error?.message || error}`, "danger");
-      window.dispatchEvent(new CustomEvent("firebase-error", {
-        detail: error
-      }));
+      console.error("Falha na inicialização Firebase:", error);
+      window.setFirebaseStatus?.(`Erro ao carregar Firebase: ${error?.message || error}`, "danger");
+      window.dispatchEvent(new CustomEvent("firebase-error", { detail: error }));
     }
   </script>
 </body>
