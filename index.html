@@ -2336,6 +2336,7 @@
 
     .approval-actions {
       display: flex;
+      align-items: end;
       gap: 8px;
       flex-wrap: wrap;
       justify-content: flex-end;
@@ -2583,6 +2584,14 @@
     <div class="login-card">
       <h2>Entrar na sala</h2>
       <p class="firebase-status warn" id="firebaseStatus" role="status" aria-live="polite">Conectando ao Firebase...</p>
+      <div class="login-note" id="accountSetupCard" hidden style="border:1px solid #e4c57b;background:#fff8e7;line-height:1.5">
+        <strong id="accountSetupTitle">Cadastro aguardando aprovação</strong>
+        <span id="accountSetupMessage"></span>
+        <label class="form-field"><span>UID do usuário no Firebase Authentication</span><input id="accountSetupUid" type="text" readonly aria-label="UID do usuário" style="font-family:monospace;font-size:12px"></label>
+        <button id="copyAccountUidBtn" type="button" class="secondary-action">Copiar UID</button>
+        <a href="https://console.firebase.google.com/project/portaldevendas-41001/firestore/databases/-default-/data" target="_blank" rel="noopener noreferrer">Abrir o Cloud Firestore deste projeto</a>
+        <small>Primeiro acesso: o proprietário do projeto precisa aprovar manualmente o primeiro administrador no console. Os demais usuários serão liberados pelo menu Permissões.</small>
+      </div>
       <p class="login-note" id="googleHostingHint" hidden>Para entrar com Google, acesse o endereço HTTPS do sistema ou execute-o em localhost. Abrir o arquivo HTML diretamente no navegador não permite concluir essa autenticação.</p>
       <div class="login-tabs" role="tablist" aria-label="Tipo de acesso">
         <button class="login-tab active" type="button" data-login-role="operator">Operador</button>
@@ -3506,6 +3515,7 @@
       userName: "Cliente",
       roomCode: "REC-4821",
       firebaseUser: null,
+      isAdmin: false,
       featuredProductId: products[0]?.id || null
     };
 
@@ -3518,6 +3528,8 @@
       clientApp: document.querySelector("#clientApp"),
       loginScreen: document.querySelector("#loginScreen"),
       firebaseStatus: document.querySelector("#firebaseStatus"),
+      accountSetupCard: document.querySelector("#accountSetupCard"),
+      accountSetupUid: document.querySelector("#accountSetupUid"),
       loginTabs: document.querySelectorAll("[data-login-role]"),
       operatorLogin: document.querySelector("#operatorLogin"),
       clientLogin: document.querySelector("#clientLogin"),
@@ -3676,6 +3688,22 @@
       els.firebaseStatus.className = `firebase-status ${type}`.trim();
     }
 
+    function showAccountSetup(user, message) {
+      if (!user?.uid || !els.accountSetupCard) return;
+      els.accountSetupCard.hidden = false;
+      els.accountSetupUid.value = user.uid;
+      document.querySelector("#accountSetupTitle").textContent = `Acesso de ${user.email || "usuário"} pendente`;
+      document.querySelector("#accountSetupMessage").textContent = message || "O administrador precisa aprovar este cadastro.";
+    }
+    function hideAccountSetup() {
+      if (els.accountSetupCard) els.accountSetupCard.hidden = true;
+    }
+    document.querySelector("#copyAccountUidBtn")?.addEventListener("click", async () => {
+      const uid = els.accountSetupUid?.value || "";
+      if (!uid) return;
+      try { await navigator.clipboard.writeText(uid); showToast("UID copiado"); }
+      catch { els.accountSetupUid.focus(); els.accountSetupUid.select(); showToast("Selecione e copie o UID"); }
+    });
     window.setFirebaseStatus = setFirebaseStatus;
     if (window.location.protocol === "file:") {
       document.querySelector("#googleHostingHint").hidden = false;
@@ -4938,9 +4966,11 @@
     }
 
     function updateAccountBadge() {
-      const operatorLabel = state.role === "operator" ? "Operador" : state.userName;
+      const operatorLabel = state.isAdmin ? "Administrador" : state.role === "operator" ? "Operador" : state.userName;
       els.accountAvatar.textContent = state.role === "operator" ? "OP" : initials(state.userName);
       els.accountName.textContent = state.firebaseUser?.email || operatorLabel;
+      const approvalsButton = document.querySelector("#approvalsBtn");
+      if (approvalsButton) approvalsButton.hidden = !state.isAdmin;
       els.clientAccountAvatar.textContent = state.role === "operator" ? "OP" : initials(state.userName);
       els.clientAccountName.textContent = state.firebaseUser?.email || (state.role === "operator" ? "Operador" : state.userName);
     }
@@ -4978,9 +5008,11 @@
       setRtcStatus("Aguardando operador");
     }
 
-    function signIn(role, name, user = null) {
+    function signIn(role, name, user = null, profile = {}) {
       state.role = role;
+      state.isAdmin = profile.role === "admin" && profile.approved === true;
       state.firebaseUser = user;
+      hideAccountSetup();
       updateClientIdentity(name);
       saveSession();
       if (role === "client") {
@@ -4996,6 +5028,7 @@
         window.portalFirebaseSignOut();
       }
       state.role = null;
+      state.isAdmin = false;
       state.firebaseUser = null;
       els.app.classList.add("is-locked");
       els.clientApp.classList.add("is-locked");
@@ -5196,7 +5229,7 @@
     }
 
     function profileRole(profile = {}) {
-      return profile.role === "operator" ? "operator" : "client";
+      return ["operator", "admin"].includes(profile.role) ? "operator" : "client";
     }
 
     async function firebaseRegister() {
@@ -5350,7 +5383,7 @@
             cnpj: "",
             phone: "",
             email: credential.user.email || email,
-            role,
+            role: "client",
             requestedRole: role,
             approved: false,
             status: "pendente",
@@ -5359,6 +5392,7 @@
           };
           await firebase.setDoc(profileRef, pendingProfile, { merge: true });
           await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", credential.user.uid), pendingProfile, { merge: true });
+          showAccountSetup(credential.user, "Cadastro criado. Se esta for a primeira conta, use o UID acima para autorizar o administrador no console do Firestore.");
           await firebase.signOut(firebase.auth);
           throw new Error("Perfil criado e pendente de aprovação");
         }
@@ -5366,6 +5400,7 @@
         const profile = profileSnap.data();
         const approval = profileApprovalState(profile);
         if (approval === "pending") {
+          showAccountSetup(credential.user, "Cadastro encontrado em usuarios. Um administrador precisa aprovar esta conta.");
           await firebase.signOut(firebase.auth);
           throw new Error("Cadastro pendente de aprovação");
         }
@@ -5377,7 +5412,8 @@
         const role = profileRole(profile);
         const name = profile.name || credential.user.displayName || credential.user.email || "Cliente";
         setFirebaseStatus(`Acesso liberado como ${role === "operator" ? "operador" : "cliente"}.`, "ok");
-        signIn(role, name, credential.user);
+        signIn(role, name, credential.user, profile);
+        startCloudSubscriptions();
       };
 
       window.portalFirebaseRegister = async registration => {
@@ -5395,7 +5431,7 @@
           cnpj: registration.cnpj || "",
           phone: registration.phone || "",
           email: registration.email,
-          role,
+          role: "client",
           requestedRole: role,
           approved: false,
           status: "pendente",
@@ -5427,6 +5463,7 @@
           const credential = await firebase.signInWithPopup(firebase.auth, provider);
           popupCompleted = true;
           const user = credential.user;
+          showAccountSetup(user, "Conta Google autenticada. Conferindo perfil no Firestore...");
           const profileRef = firebase.doc(firebase.db, "usuarios", user.uid);
           const profileSnap = await firebase.getDoc(profileRef);
           const now = firebase.serverTimestamp();
@@ -5454,6 +5491,7 @@
             };
             await firebase.setDoc(profileRef, profile);
             await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", user.uid), profile);
+            showAccountSetup(user, "Cadastro pendente salvo em usuarios e solicitacoesCadastro. Para autorizar o primeiro administrador, edite o documento no console usando o UID acima.");
             await firebase.signOut(firebase.auth);
             setLoginRole("client");
             throw new Error("Cadastro Google criado e pendente de aprovação.");
@@ -5462,6 +5500,7 @@
           const profile = profileSnap.data();
           const approval = profileApprovalState(profile);
           if (approval !== "approved") {
+            showAccountSetup(user, approval === "pending" ? "Conta encontrada, mas ainda não aprovada no Firestore." : "Conta recusada. Entre em contato com o administrador.");
             await firebase.signOut(firebase.auth);
             throw new Error(approval === "pending" ? "Cadastro pendente de aprovação." : "Cadastro bloqueado ou recusado.");
           }
@@ -5471,10 +5510,13 @@
           const name = profile.name || user.displayName || user.email || "Cliente";
           startCloudSubscriptions();
           setFirebaseStatus("Login Google realizado com sucesso.", "ok");
-          signIn(finalRole, name, user);
+          signIn(finalRole, name, user, profile);
         } catch (error) {
           if (popupCompleted && firebase.auth.currentUser) {
             // Não deixar uma sessão Firebase aberta após falha de leitura/escrita do perfil.
+            if (error?.code === "permission-denied") {
+              showAccountSetup(firebase.auth.currentUser, "O Firestore negou a leitura ou a gravação do perfil. Confira as regras de usuarios e solicitacoesCadastro. Se for seu primeiro acesso, copie o UID e crie o documento administrador manualmente no console.");
+            }
             await firebase.signOut(firebase.auth).catch(() => {});
           }
           throw error;
@@ -5517,6 +5559,10 @@
       };
 
       window.portalLoadApprovalRequests = async () => {
+        const operator = firebase.auth.currentUser;
+        if (!operator) throw new Error("Usuário não autenticado");
+        const adminSnap = await firebase.getDoc(firebase.doc(firebase.db, "usuarios", operator.uid));
+        if (!adminSnap.exists() || adminSnap.data().role !== "admin" || adminSnap.data().approved !== true) throw new Error("Somente um administrador aprovado pode listar os cadastros");
         const [requestsSnapshot, usersSnapshot] = await Promise.all([
           firebase.getDocs(firebase.collection(firebase.db, "solicitacoesCadastro")),
           firebase.getDocs(firebase.collection(firebase.db, "usuarios"))
@@ -5544,12 +5590,23 @@
           });
       };
 
-      window.portalResolveApproval = async (uid, approved) => {
+      window.portalResolveApproval = async (uid, approved, selectedRole = "client") => {
+        const adminUser = firebase.auth.currentUser;
+        if (!adminUser) throw new Error("Faça login como administrador");
+        const adminSnap = await firebase.getDoc(firebase.doc(firebase.db, "usuarios", adminUser.uid));
+        if (!adminSnap.exists() || adminSnap.data().role !== "admin" || adminSnap.data().approved !== true) throw new Error("Apenas administradores aprovados podem alterar permissões");
+        const targetRef = firebase.doc(firebase.db, "usuarios", uid);
+        const targetSnap = await firebase.getDoc(targetRef);
+        if (!targetSnap.exists()) throw new Error("Usuário não localizado em usuarios");
+        if (targetSnap.data().role === "admin") throw new Error("Perfil administrador só pode ser alterado no console do Firebase");
+        const role = approved && selectedRole === "operator" ? "operator" : "client";
         const now = firebase.serverTimestamp();
         const status = approved ? "aprovado" : "rejeitado";
-        const data = { approved, status, updatedAt: now, approvedAt: approved ? now : null };
-        await firebase.setDoc(firebase.doc(firebase.db, "usuarios", uid), data, { merge: true });
-        await firebase.setDoc(firebase.doc(firebase.db, "solicitacoesCadastro", uid), data, { merge: true });
+        const data = { approved, status, role, updatedAt: now, approvedAt: approved ? now : null, approvedBy: adminUser.uid };
+        const batch = firebase.writeBatch(firebase.db);
+        batch.set(targetRef, data, { merge: true });
+        batch.set(firebase.doc(firebase.db, "solicitacoesCadastro", uid), data, { merge: true });
+        await batch.commit();
       };
 
       firebase.onAuthStateChanged(firebase.auth, async user => {
@@ -5559,6 +5616,7 @@
           if (state.firebaseUser) {
             state.firebaseUser = null;
             state.role = null;
+            state.isAdmin = false;
             els.app.classList.add("is-locked");
             els.clientApp.classList.add("is-locked");
             els.loginScreen.hidden = false;
@@ -5584,6 +5642,8 @@
           const role = profileRole(profile);
           state.firebaseUser = user;
           state.role = role;
+          state.isAdmin = profile.role === "admin" && profile.approved === true;
+          hideAccountSetup();
           startCloudSubscriptions();
           updateClientIdentity(profile.name || user.displayName || user.email || "Cliente");
           saveSession();
@@ -5700,7 +5760,8 @@
 
     function approvalLine(profile) {
       const uid = profile.uid || profile.id || "";
-      const role = profile.requestedRole === "operator" || profile.role === "operator" ? "Operador" : "Cliente";
+      const role = profile.role === "admin" ? "Administrador" : profile.role === "operator" ? "Operador" : profile.requestedRole === "operator" ? "Operador solicitado" : "Cliente";
+      const selectedRole = profile.role === "operator" || profile.role === "admin" || profile.requestedRole === "operator" ? "operator" : "client";
       const approval = profileApprovalState(profile);
       const statusLabel = approval === "approved" ? "Aprovado" : approval === "rejected" ? "Recusado" : "Pendente";
       const statusClass = approval === "approved" ? "ok" : approval === "rejected" ? "danger" : "warning";
@@ -5709,11 +5770,12 @@
         <div class="approval-line" data-approval-uid="${escapeHtml(uid)}">
           <div>
             <h3>${escapeHtml(profile.name || "Usuário sem nome")} <span class="approval-status ${statusClass}">${statusLabel}</span></h3>
-            <p>${escapeHtml(profile.company || "Empresa não informada")} · ${escapeHtml(profile.email || "sem e-mail")}<br>CNPJ: ${escapeHtml(profile.cnpj || "não informado")} · WhatsApp: ${escapeHtml(profile.phone || "não informado")} · Perfil: ${role}</p>
+            <p>${escapeHtml(profile.company || "Empresa não informada")} · ${escapeHtml(profile.email || "sem e-mail")}<br>CNPJ: ${escapeHtml(profile.cnpj || "não informado")} · WhatsApp: ${escapeHtml(profile.phone || "não informado")} · Perfil: ${role}<br>UID: <code>${escapeHtml(uid)}</code></p>
           </div>
           <div class="approval-actions">
-            <button class="secondary-action danger-action" type="button" data-approval-action="reject">Recusar</button>
-            <button class="primary-action" type="button" data-approval-action="approve">${approveText}</button>
+            <label class="form-field"><span>Liberar como</span><select data-approved-role ${profile.role === "admin" ? "disabled" : ""}><option value="client" ${selectedRole === "client" ? "selected" : ""}>Cliente</option><option value="operator" ${selectedRole === "operator" ? "selected" : ""}>Operador</option></select></label>
+            <button class="secondary-action danger-action" type="button" data-approval-action="reject" ${profile.role === "admin" ? "disabled" : ""}>Recusar</button>
+            <button class="primary-action" type="button" data-approval-action="approve" ${profile.role === "admin" ? "disabled" : ""}>${approveText}</button>
           </div>
         </div>
       `;
@@ -5721,6 +5783,7 @@
 
     async function renderApprovalRequests() {
       const list = document.querySelector("#approvalsList");
+      if (!state.isAdmin) { showToast("Apenas administrador pode liberar cadastros"); return; }
       if (!list) return;
       if (typeof window.portalLoadApprovalRequests !== "function") {
         list.innerHTML = `<div class="empty-order"><div><strong>Sistema carregando</strong><span>Aguarde para visualizar solicitações.</span></div></div>`;
@@ -5736,11 +5799,12 @@
         list.innerHTML = requests.map(approvalLine).join("");
       } catch (error) {
         console.warn("Approval list failed", error);
-        list.innerHTML = `<div class="empty-order"><div><strong>Não foi possível carregar permissões</strong><span>Verifique se o usuário atual tem acesso de administrador.</span></div></div>`;
+        list.innerHTML = `<div class="empty-order"><div><strong>Não foi possível carregar permissões</strong><span>${escapeHtml(error?.code || error?.message || "Confira as regras do Firestore e seu perfil de administrador.")}</span></div></div>`;
       }
     }
 
     function openApprovalsModal() {
+      if (!state.isAdmin) { showToast("Permissões disponíveis somente ao administrador"); return; }
       document.querySelector("#approvalsModal")?.classList.add("open");
       renderApprovalRequests();
     }
@@ -5749,10 +5813,10 @@
       document.querySelector("#approvalsModal")?.classList.remove("open");
     }
 
-    async function resolveApproval(uid, approved) {
-      if (!uid || typeof window.portalResolveApproval !== "function") return;
+    async function resolveApproval(uid, approved, role = "client") {
+      if (!state.isAdmin || !uid || typeof window.portalResolveApproval !== "function") return;
       try {
-        await window.portalResolveApproval(uid, approved);
+        await window.portalResolveApproval(uid, approved, role);
         showToast(approved ? "Usuário aprovado" : "Usuário recusado");
         renderApprovalRequests();
       } catch (error) {
@@ -5974,7 +6038,7 @@
       const button = event.target.closest("[data-approval-action]");
       if (!button) return;
       const line = button.closest("[data-approval-uid]");
-      resolveApproval(line?.dataset.approvalUid, button.dataset.approvalAction === "approve");
+      resolveApproval(line?.dataset.approvalUid, button.dataset.approvalAction === "approve", line?.querySelector("[data-approved-role]")?.value || "client");
     });
     window.addEventListener("keydown", event => {
       if (event.key === "Escape") {
@@ -6009,7 +6073,7 @@
       const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js");
       const {
         getFirestore, doc, collection, getDoc, getDocs,
-        addDoc, setDoc, onSnapshot, serverTimestamp
+        addDoc, setDoc, writeBatch, onSnapshot, serverTimestamp
       } = await import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js");
       const {
         getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword,
@@ -6022,7 +6086,7 @@
       const auth = getAuth(app);
       window.firebasePortal = {
         app, db, auth, doc, collection, getDoc, getDocs,
-        addDoc, setDoc, onSnapshot, serverTimestamp,
+        addDoc, setDoc, writeBatch, onSnapshot, serverTimestamp,
         signInWithEmailAndPassword, createUserWithEmailAndPassword,
         GoogleAuthProvider, signInWithPopup, updateProfile, signOut,
         onAuthStateChanged
